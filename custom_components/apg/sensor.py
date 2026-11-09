@@ -179,7 +179,7 @@ class ApgPowermonitorSensor(ApgBaseEntity, SensorEntity):
         payload = self._payload()
         if payload is None:
             return None
-        return pm.summarize(payload)["latest_value"]
+        return pm.summarize(payload)["value"]
 
     @property
     def native_unit_of_measurement(self) -> str | None:
@@ -196,8 +196,11 @@ class ApgPowermonitorSensor(ApgBaseEntity, SensorEntity):
         summary = pm.summarize(payload)
         return {
             "slug": self._slug,
-            "label": pm.default_label(payload),
-            "latest_label": summary["latest_label"],
+            "date": summary["date"],
+            "value_column": summary["value_column"],
+            "mode": summary["mode"],
+            "primary_category": summary["primary_category"],
+            "breakdown": summary["breakdown"],
             "point_count": summary["point_count"],
             "series": summary["series"],
         }

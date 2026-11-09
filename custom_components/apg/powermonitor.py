@@ -1,58 +1,52 @@
-"""Best-effort interpretation of the APG Powermonitor data envelope.
+"""Interpretation of the APG Powermonitor data envelope.
 
-The Powermonitor (Infografics) API returns tabular data in a "standard
-envelope". Its exact shape is not documented in the public Swagger spec, so
-this module stays deliberately defensive: it walks the payload, finds the most
-likely data rows, and derives a latest numeric value plus the raw series. If it
-cannot make sense of the payload, it degrades gracefully and keeps the raw
-structure available as attributes so users can refine templates themselves.
+The Powermonitor (Infografics) API returns a dataset as a list of flat row
+dicts, e.g. for "renewable generation":
+
+    {"Datum Lokalzeit": "08.11.2026", "Erzeugungstyp": "Wind",
+     "Energieverbrauch [GWh]": 18.625, "KW": 45, "Energy Type": "Wind"}
+
+Every dataset has the same anatomy:
+  * a *date* column ("Datum Lokalzeit", dd.mm.yyyy),
+  * a *week* column ("KW") that must be ignored — it is the calendar week,
+    not a measurement,
+  * exactly one *value* column whose header carries the unit
+    ("... [GWh]", "... [%]", "Prozent", "MW", ...),
+  * optionally one or more *category* columns (Erzeugungstyp/Typ/Land, plus an
+    English duplicate like "Energy Type"/"Country").
+
+This module finds those columns heuristically and derives a single headline
+value for the sensor state, while keeping the full table in ``series``.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date
+import re
 from typing import Any
 
-# Keys that commonly hold the row collection in tabular envelopes.
-_ROW_CONTAINER_KEYS = ("rows", "data", "values", "series", "items", "records")
-# Keys that commonly hold a numeric measurement inside a row.
-_VALUE_KEYS = ("value", "y", "val", "amount", "v", "count")
-# Keys that commonly hold a timestamp/label inside a row.
-_TIME_KEYS = ("timestamp", "time", "date", "datetime", "utc", "x", "label", "t")
-# Keys that commonly hold a unit of measurement.
-_UNIT_KEYS = ("unit", "uom", "units", "measure")
+# Numeric columns that are dimensions, never measurements. Matched on a
+# normalised (lower-cased, unit-stripped) header.
+_DIMENSION_COLUMNS = {
+    "kw",
+    "woche",
+    "week",
+    "jahr",
+    "year",
+    "monat",
+    "month",
+    "tag",
+    "day",
+    "quartal",
+    "quarter",
+    "id",
+}
 
-
-def _find_rows(payload: Any, depth: int = 0) -> list[Any] | None:
-    """Return the most promising list of rows found within *payload*."""
-    if depth > 6:
-        return None
-    if isinstance(payload, list):
-        # A list of dicts or list of lists is very likely the data itself.
-        if payload and isinstance(payload[0], (dict, list)):
-            return payload
-        return None
-    if isinstance(payload, dict):
-        # Prefer the well-known container keys, in order.
-        for key in _ROW_CONTAINER_KEYS:
-            if key in payload:
-                found = _find_rows(payload[key], depth + 1)
-                if found:
-                    return found
-        # Fall back to scanning every value.
-        for value in payload.values():
-            found = _find_rows(value, depth + 1)
-            if found:
-                return found
-    return None
-
-
-def _first_key(row: dict[str, Any], candidates: tuple[str, ...]) -> str | None:
-    lowered = {k.lower(): k for k in row}
-    for cand in candidates:
-        if cand in lowered:
-            return lowered[cand]
-    return None
+_DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
+_UNIT_BRACKET_RE = re.compile(r"\[([^\]]+)\]")
+# Headers that are themselves a unit, or clearly a percentage.
+_BARE_UNITS = {"mw", "gwh", "mwh", "kwh", "gw", "kw_leistung"}
+_PERCENT_HEADERS = {"prozent", "percent", "anteil"}
 
 
 def _to_number(value: Any) -> float | None:
@@ -61,85 +55,221 @@ def _to_number(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
-        cleaned = value.strip().replace(",", ".")
         try:
-            return float(cleaned)
+            return float(value.strip().replace(",", "."))
         except ValueError:
             return None
     return None
 
 
-def _row_value(row: Any) -> float | None:
-    """Extract a numeric value from a single row (dict or list)."""
-    if isinstance(row, dict):
-        key = _first_key(row, _VALUE_KEYS)
-        if key is not None:
-            return _to_number(row[key])
-        # No obvious value key: take the last numeric field.
-        numbers = [n for n in (_to_number(v) for v in row.values()) if n is not None]
-        return numbers[-1] if numbers else None
-    if isinstance(row, (list, tuple)):
-        numbers = [n for n in (_to_number(v) for v in row) if n is not None]
-        return numbers[-1] if numbers else None
-    return _to_number(row)
-
-
-def _row_time(row: Any) -> str | None:
-    if isinstance(row, dict):
-        key = _first_key(row, _TIME_KEYS)
-        if key is not None and row[key] is not None:
-            return str(row[key])
-    return None
-
-
-def _find_unit(payload: Any, depth: int = 0) -> str | None:
-    if depth > 4 or not isinstance(payload, dict):
+def _parse_date(value: Any) -> date | None:
+    if not isinstance(value, str):
         return None
-    key = _first_key(payload, _UNIT_KEYS)
-    if key is not None and isinstance(payload[key], str):
-        return payload[key]
-    for value in payload.values():
-        unit = _find_unit(value, depth + 1)
-        if unit:
-            return unit
+    match = _DATE_RE.match(value.strip())
+    if not match:
+        return None
+    day, month, year = (int(g) for g in match.groups())
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _normalise(header: str) -> str:
+    # Drop the bracketed unit and whitespace for name comparisons.
+    return _UNIT_BRACKET_RE.sub("", header).strip().lower()
+
+
+def _unit_from_header(header: str) -> str | None:
+    bracket = _UNIT_BRACKET_RE.search(header)
+    if bracket:
+        return bracket.group(1).strip()
+    norm = _normalise(header)
+    if norm in _PERCENT_HEADERS:
+        return "%"
+    if norm in _BARE_UNITS:
+        return header.strip()
     return None
 
 
-def summarize(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return a summary dict used by the Powermonitor sensors.
-
-    Keys:
-        latest_value: last numeric value in the series, or ``None``
-        latest_label: label/timestamp of that last point, or ``None``
-        unit: detected unit of measurement, or ``None``
-        point_count: number of rows found
-        series: the raw rows (capped) for use as an attribute
-    """
-    rows = _find_rows(payload) or []
-    latest_value: float | None = None
-    latest_label: str | None = None
+def _columns(rows: list[dict[str, Any]]) -> list[str]:
+    seen: list[str] = []
     for row in rows:
-        value = _row_value(row)
-        if value is not None:
-            latest_value = value
-            latest_label = _row_time(row)
+        if isinstance(row, dict):
+            for key in row:
+                if key not in seen:
+                    seen.append(key)
+    return seen
+
+
+def _is_numeric_column(rows: list[dict[str, Any]], column: str) -> bool:
+    values = [row.get(column) for row in rows if isinstance(row, dict) and column in row]
+    numbers = [v for v in values if _to_number(v) is not None]
+    # A column is numeric if it has values and at least 60% parse as numbers.
+    return bool(values) and len(numbers) >= max(1, int(0.6 * len(values)))
+
+
+def _pick_value_column(rows: list[dict[str, Any]], columns: list[str]) -> str | None:
+    candidates = [
+        c
+        for c in columns
+        if _normalise(c) not in _DIMENSION_COLUMNS and _is_numeric_column(rows, c)
+    ]
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    # Prefer a column that declares a unit, then the one with the widest spread
+    # (dimension-like counters tend to be near-constant).
+    unit_cols = [c for c in candidates if _unit_from_header(c)]
+    pool = unit_cols or candidates
+
+    def spread(column: str) -> float:
+        nums = [
+            _to_number(row.get(column))
+            for row in rows
+            if isinstance(row, dict) and _to_number(row.get(column)) is not None
+        ]
+        return (max(nums) - min(nums)) if nums else 0.0
+
+    return max(pool, key=spread)
+
+
+def _pick_date_column(rows: list[dict[str, Any]], columns: list[str]) -> str | None:
+    for column in columns:
+        parsed = [
+            _parse_date(row.get(column))
+            for row in rows
+            if isinstance(row, dict) and column in row
+        ]
+        if parsed and sum(p is not None for p in parsed) >= max(1, int(0.6 * len(parsed))):
+            return column
+    return None
+
+
+def _pick_category_column(
+    columns: list[str], value_column: str | None, date_column: str | None
+) -> str | None:
+    for column in columns:
+        if column == value_column or column == date_column:
+            continue
+        if _normalise(column) in _DIMENSION_COLUMNS:
+            continue
+        # The first remaining (non-numeric) column is the primary dimension;
+        # English duplicates such as "Energy Type"/"Country" come later.
+        return column
+    return None
+
+
+def summarize(payload: Any) -> dict[str, Any]:
+    """Derive the headline value and metadata from a Powermonitor dataset.
+
+    Returns keys: value, unit, date, value_column, primary_category, mode,
+    breakdown, point_count, series.
+    """
+    rows = payload if isinstance(payload, list) else _find_rows(payload)
+    rows = [r for r in (rows or []) if isinstance(r, dict)]
+
+    empty = {
+        "value": None,
+        "unit": None,
+        "date": None,
+        "value_column": None,
+        "primary_category": None,
+        "mode": None,
+        "breakdown": None,
+        "point_count": len(rows),
+        "series": rows[-64:],
+    }
+    if not rows:
+        return empty
+
+    columns = _columns(rows)
+    value_column = _pick_value_column(rows, columns)
+    if value_column is None:
+        return empty
+    date_column = _pick_date_column(rows, columns)
+    category_column = _pick_category_column(columns, value_column, date_column)
+    unit = _unit_from_header(value_column)
+
+    # Restrict to the most recent date present (if any).
+    latest_date: date | None = None
+    latest_label: str | None = None
+    if date_column is not None:
+        dated = [
+            (_parse_date(r.get(date_column)), r)
+            for r in rows
+            if _parse_date(r.get(date_column)) is not None
+        ]
+        if dated:
+            latest_date = max(d for d, _ in dated)
+            latest_rows = [r for d, r in dated if d == latest_date]
+            latest_label = next(
+                (r.get(date_column) for r in latest_rows), None
+            )
+        else:
+            latest_rows = rows
+    else:
+        latest_rows = rows
+
+    values = [
+        _to_number(r.get(value_column))
+        for r in latest_rows
+        if _to_number(r.get(value_column)) is not None
+    ]
+    if not values:
+        return {**empty, "value_column": value_column, "unit": unit}
+
+    # Percentage shares across several categories sum to 100, so the headline
+    # is the primary (first) slice. Everything else is a total for the day.
+    is_share = unit == "%" and len(latest_rows) > 1
+    if is_share:
+        value = values[0]
+        mode = "share"
+    else:
+        value = sum(values)
+        mode = "sum" if len(values) > 1 else "single"
+
+    breakdown: dict[str, Any] | None = None
+    primary_category: str | None = None
+    if category_column is not None:
+        breakdown = {}
+        for row in latest_rows:
+            number = _to_number(row.get(value_column))
+            if number is None:
+                continue
+            key = str(row.get(category_column))
+            breakdown[key] = round(number, 3)
+        if breakdown:
+            primary_category = next(iter(breakdown))
 
     return {
-        "latest_value": latest_value,
-        "latest_label": latest_label,
-        "unit": _find_unit(payload),
+        "value": round(value, 2),
+        "unit": unit,
+        "date": latest_label,
+        "value_column": value_column,
+        "primary_category": primary_category,
+        "mode": mode,
+        "breakdown": breakdown,
         "point_count": len(rows),
-        "series": rows[-48:],  # cap to keep the attribute reasonable
+        "series": rows[-64:],
     }
 
 
-def default_label(payload: dict[str, Any]) -> str | None:
-    """Try to read a human readable title from the envelope."""
-    for key in ("title", "name", "label", "slug"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    meta = payload.get("meta")
-    if isinstance(meta, dict):
-        return default_label(meta)
+def _find_rows(payload: Any, depth: int = 0) -> list[Any] | None:
+    """Locate the row list inside an envelope that wraps it in a dict."""
+    if depth > 6:
+        return None
+    if isinstance(payload, list):
+        return payload if payload and isinstance(payload[0], dict) else None
+    if isinstance(payload, dict):
+        for key in ("data", "rows", "values", "items", "records", "result"):
+            if key in payload:
+                found = _find_rows(payload[key], depth + 1)
+                if found:
+                    return found
+        for value in payload.values():
+            found = _find_rows(value, depth + 1)
+            if found:
+                return found
     return None
