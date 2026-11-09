@@ -1,0 +1,65 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Austrian Power Grid",
+        "description": "Die Peak-Hour-API benötigt kein Konto. Um zusätzlich APG-Powermonitor-Daten abzurufen, füge einen Bearer-Token ein und wähle die gewünschten Datensätze. Woher du einen Token bekommst, steht in der README der Integration.",
+        "data": {
+          "scan_interval_minutes": "Aktualisierungsintervall (Minuten)",
+          "powermonitor_token": "Powermonitor Bearer-Token (optional)",
+          "powermonitor_slugs": "Powermonitor-Datensätze"
+        }
+      }
+    },
+    "error": {
+      "token_required": "Datensätze nur gemeinsam mit einem Token auswählen.",
+      "invalid_auth": "Der Powermonitor-Token wurde abgelehnt (401).",
+      "powermonitor_unavailable": "Die Powermonitor-API ist nicht erreichbar. Die Peak-Hour-Daten funktionieren trotzdem."
+    },
+    "abort": {
+      "already_configured": "Austrian Power Grid ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Austrian-Power-Grid-Optionen",
+        "data": {
+          "scan_interval_minutes": "Aktualisierungsintervall (Minuten)",
+          "powermonitor_token": "Powermonitor Bearer-Token (optional)",
+          "powermonitor_slugs": "Powermonitor-Datensätze"
+        }
+      }
+    },
+    "error": {
+      "token_required": "Datensätze nur gemeinsam mit einem Token auswählen.",
+      "invalid_auth": "Der Powermonitor-Token wurde abgelehnt (401).",
+      "powermonitor_unavailable": "Die Powermonitor-API ist nicht erreichbar. Die Peak-Hour-Daten funktionieren trotzdem."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "peak_hour_now": {
+        "name": "Spitzenstunde jetzt"
+      }
+    },
+    "sensor": {
+      "peak_status": {
+        "name": "Spitzenstatus",
+        "state": {
+          "peak": "Spitze",
+          "off_peak": "Keine Spitze"
+        }
+      },
+      "next_peak_hour": {
+        "name": "Nächste Spitzenstunde"
+      },
+      "peak_hours_today": {
+        "name": "Spitzenstunden heute"
+      },
+      "peak_hours_remaining": {
+        "name": "Verbleibende Spitzenstunden"
+      }
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Austrian Power Grid",
+        "description": "The peak hour API needs no account. To also pull APG Powermonitor data, paste a Bearer token and pick the datasets you want. See the integration README for where to get a token.",
+        "data": {
+          "scan_interval_minutes": "Update interval (minutes)",
+          "powermonitor_token": "Powermonitor Bearer token (optional)",
+          "powermonitor_slugs": "Powermonitor datasets"
+        }
+      }
+    },
+    "error": {
+      "token_required": "Pick at least one dataset only together with a token.",
+      "invalid_auth": "The Powermonitor token was rejected (401).",
+      "powermonitor_unavailable": "The Powermonitor API could not be reached. Peak hour data still works."
+    },
+    "abort": {
+      "already_configured": "Austrian Power Grid is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Austrian Power Grid options",
+        "data": {
+          "scan_interval_minutes": "Update interval (minutes)",
+          "powermonitor_token": "Powermonitor Bearer token (optional)",
+          "powermonitor_slugs": "Powermonitor datasets"
+        }
+      }
+    },
+    "error": {
+      "token_required": "Pick at least one dataset only together with a token.",
+      "invalid_auth": "The Powermonitor token was rejected (401).",
+      "powermonitor_unavailable": "The Powermonitor API could not be reached. Peak hour data still works."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "peak_hour_now": {
+        "name": "Peak hour now"
+      }
+    },
+    "sensor": {
+      "peak_status": {
+        "name": "Peak status",
+        "state": {
+          "peak": "Peak",
+          "off_peak": "Off-peak"
+        }
+      },
+      "next_peak_hour": {
+        "name": "Next peak hour"
+      },
+      "peak_hours_today": {
+        "name": "Peak hours today"
+      },
+      "peak_hours_remaining": {
+        "name": "Peak hours remaining"
+      }
+    }
+  }
+}

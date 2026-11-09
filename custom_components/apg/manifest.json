@@ -1,0 +1,13 @@
+{
+  "domain": "apg",
+  "name": "Austrian Power Grid (APG)",
+  "codeowners": ["@stoffi-cl"],
+  "config_flow": true,
+  "documentation": "https://github.com/stoffi-cl/apg-hacs",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/stoffi-cl/apg-hacs/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}
